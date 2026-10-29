@@ -39,6 +39,7 @@ final class NowPlaying {
         Bitmap art;
         boolean playing;
         long updated;
+        String artKey = "";
     }
 
     private static NowPlaying instance;
@@ -52,7 +53,6 @@ final class NowPlaying {
     private final List<Listener> listeners = new ArrayList<>();
     private final Track app = new Track(), local = new Track(), bt = new Track();
     final BtClient btClient = new BtClient();
-
     private final MediaSessionManager sessions;
     private final ComponentName notificationListener;
     private MediaController controller;
@@ -115,6 +115,7 @@ final class NowPlaying {
                     bt.title = nz(i.getStringExtra("extra_avrcp_id3_title"));
                     bt.artist = nz(i.getStringExtra("extra_avrcp_id3_artist"));
                     if (!bt.title.isEmpty()) bt.updated = now;
+                    fetchBtArt();
                     break;
                 case "com.bt.ACTION_BT_MUSIC_PLAY":
                     bt.playing = true;
@@ -129,6 +130,8 @@ final class NowPlaying {
                     bt.title = "";
                     bt.artist = "";
                     bt.updated = 0;
+                    bt.art = null;
+                    bt.artKey = "";
                     break;
             }
             notifyListeners();
@@ -286,5 +289,83 @@ final class NowPlaying {
 
     private static String nz(String s) {
         return s == null ? "" : s.trim();
+    }
+
+    // ---------- Album cover for Bluetooth audio ----------
+
+    private void fetchBtArt() {
+        final String key = bt.artist + "|" + bt.title;
+        if (key.equals(bt.artKey)) return;
+        bt.artKey = key;
+        bt.art = null;
+        if (bt.title.isEmpty()) return;
+        ArtFetcher.fetch(ctx, bt.artist, bt.title, art -> {
+            if (key.equals(bt.artKey)) {
+                bt.art = art;
+                notifyListeners();
+            }
+        });
+    }
+
+    /** Busca carátulas en internet (iTunes Search) y las guarda en caché. */
+    static final class ArtFetcher {
+        interface Callback { void onArt(Bitmap art); }
+
+        private static final android.os.Handler MAIN =
+                new android.os.Handler(android.os.Looper.getMainLooper());
+
+        static void fetch(Context c, String artist, String title, Callback cb) {
+            final java.io.File dir = new java.io.File(c.getApplicationContext().getCacheDir(), "art");
+            final String a = artist == null ? "" : artist.trim();
+            final String t = title == null ? "" : title.trim();
+            if (t.isEmpty()) return;
+            new Thread(() -> {
+                Bitmap bmp = null;
+                try {
+                    dir.mkdirs();
+                    java.io.File f = new java.io.File(dir,
+                            Integer.toHexString((a + "|" + t).toLowerCase().hashCode()) + ".jpg");
+                    if (f.exists()) {
+                        bmp = android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath());
+                    } else {
+                        String url = lookup(a, t);
+                        byte[] data = url == null ? null : download(url);
+                        if (data != null) {
+                            try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
+                                out.write(data);
+                            }
+                            bmp = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.length);
+                        }
+                    }
+                } catch (Exception ignored) { }
+                final Bitmap result = bmp;
+                if (result != null) MAIN.post(() -> cb.onArt(result));
+            }).start();
+        }
+
+        private static String lookup(String artist, String title) throws Exception {
+            String term = java.net.URLEncoder.encode((artist + " " + title).trim(), "UTF-8");
+            byte[] json = download("https://itunes.apple.com/search?media=music&entity=song&limit=1&term=" + term);
+            if (json == null) return null;
+            org.json.JSONArray results = new org.json.JSONObject(new String(json, "UTF-8")).getJSONArray("results");
+            if (results.length() == 0) return null;
+            String art = results.getJSONObject(0).optString("artworkUrl100", "");
+            return art.isEmpty() ? null : art.replace("100x100bb", "400x400bb");
+        }
+
+        private static byte[] download(String url) throws Exception {
+            java.net.HttpURLConnection con = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            con.setConnectTimeout(5000);
+            con.setReadTimeout(8000);
+            try (java.io.InputStream in = con.getInputStream()) {
+                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                return out.toByteArray();
+            } finally {
+                con.disconnect();
+            }
+        }
     }
 }
