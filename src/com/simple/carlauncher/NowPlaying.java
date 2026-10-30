@@ -116,6 +116,7 @@ final class NowPlaying {
                     bt.artist = nz(i.getStringExtra("extra_avrcp_id3_artist"));
                     if (!bt.title.isEmpty()) bt.updated = now;
                     fetchBtArt();
+                    debugExtras(i);
                     break;
                 case "com.bt.ACTION_BT_MUSIC_PLAY":
                     bt.playing = true;
@@ -291,6 +292,19 @@ final class NowPlaying {
         return s == null ? "" : s.trim();
     }
 
+    // ---------- Diagnostic: which data the Bluetooth module sends ----------
+
+    private void debugExtras(Intent i) {
+        android.os.Bundle b = i.getExtras();
+        if (b == null) return;
+        StringBuilder sb = new StringBuilder("Datos BT:\n");
+        for (String k : b.keySet()) {
+            Object v = b.get(k);
+            sb.append(k).append(" = ").append(v == null ? "null" : v.getClass().getSimpleName()).append('\n');
+        }
+        android.widget.Toast.makeText(ctx, sb.toString(), android.widget.Toast.LENGTH_LONG).show();
+    }
+
     // ---------- Album cover for Bluetooth audio ----------
 
     private void fetchBtArt() {
@@ -315,12 +329,14 @@ final class NowPlaying {
                 new android.os.Handler(android.os.Looper.getMainLooper());
 
         static void fetch(Context c, String artist, String title, Callback cb) {
-            final java.io.File dir = new java.io.File(c.getApplicationContext().getCacheDir(), "art");
+            final Context app = c.getApplicationContext();
+            final java.io.File dir = new java.io.File(app.getCacheDir(), "art");
             final String a = artist == null ? "" : artist.trim();
             final String t = title == null ? "" : title.trim();
             if (t.isEmpty()) return;
             new Thread(() -> {
                 Bitmap bmp = null;
+                String problem = null;
                 try {
                     dir.mkdirs();
                     java.io.File f = new java.io.File(dir,
@@ -329,17 +345,29 @@ final class NowPlaying {
                         bmp = android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath());
                     } else {
                         String url = lookup(a, t);
-                        byte[] data = url == null ? null : download(url);
-                        if (data != null) {
-                            try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
-                                out.write(data);
+                        if (url == null) {
+                            problem = "no encontrada: " + a + " - " + t;
+                        } else {
+                            byte[] data = download(url);
+                            if (data != null) {
+                                try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
+                                    out.write(data);
+                                }
+                                bmp = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.length);
                             }
-                            bmp = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.length);
                         }
                     }
-                } catch (Exception ignored) { }
+                } catch (Exception e) {
+                    problem = "error " + e.getClass().getSimpleName() + ": " + e.getMessage();
+                }
                 final Bitmap result = bmp;
-                if (result != null) MAIN.post(() -> cb.onArt(result));
+                final String msg = problem;
+                if (result != null) {
+                    MAIN.post(() -> cb.onArt(result));
+                } else if (msg != null) {
+                    MAIN.post(() -> android.widget.Toast.makeText(app, "Carátula " + msg,
+                            android.widget.Toast.LENGTH_LONG).show());
+                }
             }).start();
         }
 
