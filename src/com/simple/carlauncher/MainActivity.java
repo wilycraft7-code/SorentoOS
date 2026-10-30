@@ -22,15 +22,12 @@ import java.util.Calendar;
 
 public class MainActivity extends Activity implements NowPlaying.Listener {
 
-
     private static final String MAPS = "com.google.android.apps.maps/com.google.android.maps.MapsActivity";
     private static final String EQ = "com.nwd.audioset/.home_horizontalActivity";
     private static final String SETTINGS = "com.android.car.setting/.home_horizontalActivity";
-
     private static final long WEATHER_EVERY_MS = 30 * 60 * 1000;
 
     private final Handler handler = new Handler();
-    private final RadioClient radio = new RadioClient();
     private NowPlaying nowPlaying;
 
     private TextView greeting, weatherTemp, weatherDesc, weatherCity, weatherExtra;
@@ -38,6 +35,7 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
     private GradientDrawable weatherBg;
     private ImageView car, carLights;
     private boolean hasLightsImage;
+    private boolean illRegistered;
     private TextView oilInfo;
     private boolean createdDark;
     private String createdProfile;
@@ -45,10 +43,9 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
     private String profileStamp() {
         return Profile.name(this) + "|" + Profile.carPhotoFile(this).lastModified();
     }
+
     private GradientDrawable oilBg;
     private long lastWeatherFetch;
-
-    private TextView fmBand, fmFreq, fmUnit;
     private ImageView art, playBtn;
     private TextView songSource, songTitle, songArtist;
 
@@ -67,19 +64,18 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
         LinearLayout middle = new LinearLayout(this);
         middle.setOrientation(LinearLayout.VERTICAL);
         middle.addView(buildClockCard(), vweight(0.62f, 0));
-        middle.addView(buildFmCard(), vweight(1.38f, dp(12)));
+        middle.addView(buildSpeedCard(), vweight(1.38f, dp(12)));
         cards.addView(middle, weight(1f, dp(12)));
 
         cards.addView(buildMusicCard(), weight(1.05f, dp(12)));
         root.addView(cards, new LinearLayout.LayoutParams(-1, 0, 1f));
-
         root.addView(buildDock(), new LinearLayout.LayoutParams(-1, dp(84)));
         setContentView(root);
 
-        radio.bind(this);
         nowPlaying = NowPlaying.get(this);
         createdDark = Ui.isDark(this);
         createdProfile = profileStamp();
+
         // Shared installs: ask for name, car photo and permissions on first start.
         if (!Profile.isSetupDone(this) && Profile.bundledCar(this, false) == 0) {
             startActivity(new Intent(this, SetupActivity.class));
@@ -104,7 +100,6 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
         TextView hello = left(Ui.text(this, Profile.hello(this), 34, Color.WHITE));
         hello.setTypeface(Typeface.DEFAULT_BOLD);
         card.addView(hello);
-
         greeting = left(Ui.text(this, "", 17, 0xCCFFFFFF));
         greeting.setPadding(0, dp(4), 0, 0);
         card.addView(greeting);
@@ -121,6 +116,16 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
         int bundled = Profile.bundledCar(this, false), bundledLights = Profile.bundledCar(this, true);
         if (own != null) {
             car.setImageBitmap(own);
+            // Optional "lights on" photo chosen in the setup screen (car_lights.png).
+            java.io.File lightsFile = new java.io.File(getFilesDir(), "car_lights.png");
+            if (lightsFile.exists()) {
+                android.graphics.Bitmap ownLights =
+                        android.graphics.BitmapFactory.decodeFile(lightsFile.getAbsolutePath());
+                if (ownLights != null) {
+                    carLights.setImageBitmap(ownLights);
+                    hasLightsImage = true;
+                }
+            }
         } else if (bundled != 0) {
             car.setImageResource(bundled);
             if (bundledLights != 0) {
@@ -150,7 +155,6 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
         weatherTemp.setIncludeFontPadding(false);
         weatherTemp.setPadding(dp(10), 0, dp(12), 0);
         now.addView(weatherTemp);
-
         LinearLayout texts = new LinearLayout(this);
         texts.setOrientation(LinearLayout.VERTICAL);
         weatherDesc = left(Ui.text(this, "Cargando el clima…", 16, Color.WHITE));
@@ -193,7 +197,7 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
         weatherDesc.setText(w.description());
         weatherCity.setText(w.city.isEmpty() ? "Sensación " + w.feelsLike + "°"
                 : w.city + " · Sensación " + w.feelsLike + "°");
-        weatherExtra.setText("↑ " + w.max + "°   ↓ " + w.min + "°   💧 " + w.humidity + "%   " + w.wind + " km/h");
+        weatherExtra.setText("↑ " + w.max + "° ↓ " + w.min + "° 💧 " + w.humidity + "% " + w.wind + " km/h");
         weatherBg.setColors(Ui.isDark(this) ? new int[]{0xFF1E1E28, 0xFF121218}
                 : w.isDay ? new int[]{0x993FA9FF, 0x667B4DFF} : new int[]{0x8C2A3A9E, 0x80261A6E});
     }
@@ -294,73 +298,180 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
         return card;
     }
 
-    // ---------- FM ----------
+    // ---------- Logo + speedometer (GPS, km/h) ----------
 
-    private View buildFmCard() {
+    private SpeedView speedView;
+    private boolean customFont;
+    private android.location.LocationManager locationManager;
+    private android.animation.ValueAnimator speedAnim;
+    private long lastFix;
+
+    private View buildSpeedCard() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setGravity(Gravity.CENTER);
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
         card.setBackground(Ui.card(this));
+        card.setPadding(dp(14), dp(12), dp(14), dp(10));
 
-        LinearLayout head = new LinearLayout(this);
-        head.setGravity(Gravity.CENTER);
-        ImageView radioIcon = new ImageView(this);
-        radioIcon.setImageResource(R.drawable.ic_radio);
-        radioIcon.setColorFilter(0xFFFF9F5A);
-        head.addView(radioIcon, new LinearLayout.LayoutParams(dp(22), dp(22)));
-        fmBand = Ui.text(this, "RADIO FM", 15, Color.WHITE);
-        fmBand.setPadding(dp(8), 0, 0, 0);
-        head.addView(fmBand);
-        card.addView(head);
+        card.addView(buildLogo(), new LinearLayout.LayoutParams(-1, 0, 0.8f));
 
-        LinearLayout row = new LinearLayout(this);
-        row.setGravity(Gravity.CENTER);
-        row.addView(Ui.iconButton(this, R.drawable.ic_prev, 52, false, () -> stationStep(false)),
-                new LinearLayout.LayoutParams(dp(52), dp(52)));
-        fmFreq = Ui.text(this, "--.-", 50, Color.WHITE);
-        fmFreq.setTypeface(Typeface.DEFAULT_BOLD);
-        row.addView(fmFreq, new LinearLayout.LayoutParams(0, -2, 1f));
-        row.addView(Ui.iconButton(this, R.drawable.ic_next, 52, false, () -> stationStep(true)),
-                new LinearLayout.LayoutParams(dp(52), dp(52)));
-        row.setPadding(dp(12), dp(10), dp(12), 0);
-        card.addView(row, new LinearLayout.LayoutParams(-1, -2));
-
-        fmUnit = Ui.text(this, "MHz", 15, 0x99FFFFFF);
-        card.addView(fmUnit);
+        speedView = new SpeedView(this, speedFace(), customFont ? 1f : 1.2f);
+        card.addView(speedView, new LinearLayout.LayoutParams(-1, 0, 1.4f));
 
         Ui.pressable(card, 0.97f);
-        card.setOnClickListener(v -> openRadio());
+        card.setOnClickListener(v -> openMaps());
         return card;
     }
 
-    private void stationStep(boolean next) {
-        if (!Profile.isNwd(this)) {
-            openRadio();
-            return;
-        }
-        if (!Ui.radioIsSource(this)) {
-            Ui.selectRadio(this, radio); // first tap from Bluetooth: bring the radio back
-            handler.postDelayed(this::updateRadio, 2500);
-            return;
-        }
-        radio.preset(next);
-        handler.postDelayed(this::updateRadio, 300);
+    private int drawableId(String name) {
+        return getResources().getIdentifier(name, "drawable", getPackageName());
     }
 
-    private void updateRadio() {
-        RadioClient.Station st = radio.current();
-        if (st == null) return;
-        fmBand.setText(st.psName.isEmpty() ? "RADIO " + st.bandLabel() : st.bandLabel() + " · " + st.psName);
-        fmFreq.setText(st.frequencyLabel());
-        fmUnit.setText(st.isAm() ? "kHz" : "MHz");
+    /** res/drawable/sorento_os.png (+ optional sorento_os_night.png with white letters for the dark theme). */
+    private View buildLogo() {
+        int id = Ui.isDark(this) ? drawableId("sorento_os_night") : 0;
+        if (id == 0) id = drawableId("sorento_os");
+        if (id != 0) {
+            ImageView iv = new ImageView(this);
+            iv.setImageResource(id);
+            iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            iv.setPadding(dp(4), dp(4), dp(4), dp(4));
+            return iv;
+        }
+        android.text.SpannableString s = new android.text.SpannableString("SORENTO OS");
+        s.setSpan(new android.text.style.ForegroundColorSpan(0xFF4FC3F7), 8, 10, 0);
+        TextView t = Ui.text(this, "", 24, Color.WHITE);
+        t.setText(s);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        t.setLetterSpacing(0.25f);
+        t.setGravity(Gravity.CENTER);
+        return t;
     }
 
-    private final Runnable radioPoll = new Runnable() {
-        public void run() {
-            updateRadio();
-            handler.postDelayed(this, 1000);
+    /** Custom font from res/font/speed_font.ttf if present; otherwise a heavy italic system font. */
+    private Typeface speedFace() {
+        try {
+            int id = getResources().getIdentifier("speed_font", "font", getPackageName());
+            if (id != 0 && android.os.Build.VERSION.SDK_INT >= 26) {
+                Typeface f = getResources().getFont(id);
+                if (f != null) {
+                    customFont = true;
+                    return f;
+                }
+            }
+        } catch (Exception ignored) { }
+        customFont = false;
+        return Typeface.create("sans-serif-black", Typeface.ITALIC);
+    }
+
+    private final android.location.LocationListener speedListener = new android.location.LocationListener() {
+        @Override
+        public void onLocationChanged(android.location.Location l) {
+            lastFix = SystemClock.elapsedRealtime();
+            float kmh = l.hasSpeed() ? l.getSpeed() * 3.6f : 0f;
+            if (kmh < 3f) kmh = 0f; // GPS noise while stopped
+            setSpeed(kmh);
+        }
+
+        @Override
+        public void onStatusChanged(String provider, int status, Bundle extras) { }
+
+        @Override
+        public void onProviderEnabled(String provider) { }
+
+        @Override
+        public void onProviderDisabled(String provider) {
+            setSpeed(0f);
         }
     };
+
+    /** If the GPS stops reporting (tunnel, parking), do not keep showing the last speed. */
+    private final Runnable speedWatch = new Runnable() {
+        public void run() {
+            if (SystemClock.elapsedRealtime() - lastFix > 5000 && speedView != null && speedView.value != 0f) {
+                setSpeed(0f);
+            }
+            handler.postDelayed(this, 2000);
+        }
+    };
+
+    private void startSpeed() {
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return;
+        try {
+            locationManager = (android.location.LocationManager) getSystemService(LOCATION_SERVICE);
+            locationManager.requestLocationUpdates(
+                    android.location.LocationManager.GPS_PROVIDER, 1000L, 0f, speedListener);
+            lastFix = SystemClock.elapsedRealtime();
+            handler.removeCallbacks(speedWatch);
+            handler.postDelayed(speedWatch, 2000);
+        } catch (Exception ignored) {
+            // No GPS provider: the speed simply stays at 0.
+        }
+    }
+
+    private void stopSpeed() {
+        handler.removeCallbacks(speedWatch);
+        if (speedAnim != null) speedAnim.cancel();
+        try {
+            if (locationManager != null) locationManager.removeUpdates(speedListener);
+        } catch (Exception ignored) { }
+    }
+
+    private void setSpeed(float kmh) {
+        if (speedView == null) return;
+        if (speedAnim != null) speedAnim.cancel();
+        speedAnim = android.animation.ValueAnimator.ofFloat(speedView.value, kmh);
+        speedAnim.setDuration(500);
+        speedAnim.addUpdateListener(a -> speedView.setValue((Float) a.getAnimatedValue()));
+        speedAnim.start();
+    }
+
+    /** Big speed number with "KM/H" underneath, centered. */
+    private static final class SpeedView extends View {
+        private final android.graphics.Paint number = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Paint unit = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        float value;
+
+        SpeedView(android.content.Context c, Typeface face, float scaleX) {
+            super(c);
+            number.setColor(Color.WHITE);
+            number.setTextAlign(android.graphics.Paint.Align.CENTER);
+            number.setTypeface(face);
+            number.setTextScaleX(scaleX);
+            unit.setColor(Color.WHITE);
+            unit.setTextAlign(android.graphics.Paint.Align.CENTER);
+            unit.setTypeface(face);
+            unit.setTextScaleX(scaleX);
+        }
+
+        void setValue(float v) {
+            value = v;
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(android.graphics.Canvas canvas) {
+            float w = getWidth(), h = getHeight();
+            // Size from the height, then shrink if three digits would not fit the width.
+            float size = h * 0.60f;
+            number.setTextSize(size);
+            float maxWidth = w * 0.92f;
+            float three = number.measureText("000");
+            if (three > maxWidth) {
+                size *= maxWidth / three;
+                number.setTextSize(size);
+            }
+            float cx = w / 2f;
+            android.graphics.Paint.FontMetrics nm = number.getFontMetrics();
+            float numberY = h * 0.40f - (nm.ascent + nm.descent) / 2f;
+            canvas.drawText(String.valueOf(Math.round(value)), cx, numberY, number);
+
+            unit.setTextSize(size * 0.34f);
+            android.graphics.Paint.FontMetrics um = unit.getFontMetrics();
+            float unitY = h * 0.84f - (um.ascent + um.descent) / 2f;
+            canvas.drawText("KM/H", cx, unitY, unit);
+        }
+    }
 
     // ---------- Music (any source) ----------
 
@@ -430,7 +541,6 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
         songTitle.setText(empty ? "Nada sonando" : t.title);
         songArtist.setText(empty ? "Toca para abrir la música" : t.artist);
         playBtn.setImageResource(t != null && t.playing ? R.drawable.ic_pause : R.drawable.ic_play);
-
         if (t != null && t.art != null) {
             art.setPadding(0, 0, 0, 0);
             art.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -561,6 +671,7 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
         updateOil();
         showWeather(Weather.cached(this));
         registerReceiver(illReceiver, new android.content.IntentFilter("com.nwd.ACTION_ILL_STATE_CHANGE"));
+        illRegistered = true;
         boolean lights = hasLightsImage && carLightsOn();
         android.util.Log.d("CarLights", "onResume lights=" + lights);
         carLights.setAlpha(lights ? 1f : 0f);
@@ -569,7 +680,7 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
             requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 1);
         }
         handler.post(periodic);
-        if (Profile.isNwd(this)) handler.post(radioPoll);
+        startSpeed();
         nowPlaying.addListener(this);
         onNowPlayingChanged();
     }
@@ -577,21 +688,21 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
     @Override
     protected void onPause() {
         super.onPause();
-        unregisterReceiver(illReceiver);
+        if (illRegistered) {
+            unregisterReceiver(illReceiver);
+            illRegistered = false;
+        }
         handler.removeCallbacks(periodic);
-        handler.removeCallbacks(radioPoll);
+        stopSpeed();
         nowPlaying.removeListener(this);
     }
 
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
-        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) fetchWeather(true);
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        radio.unbind(this);
+        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
+            fetchWeather(true);
+            startSpeed();
+        }
     }
 
     private TextView left(TextView tv) {
