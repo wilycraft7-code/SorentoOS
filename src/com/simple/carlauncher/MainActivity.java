@@ -426,8 +426,12 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
         speedAnim.start();
     }
 
-    /** Big speed number with "KM/H" underneath, centered. */
+    /** Speed number with "KM/H" underneath, centered. */
     private static final class SpeedView extends View {
+        // Sizes relative to the card height: lower these two numbers to make the text smaller.
+        private static final float NUMBER_SCALE = 0.45f;
+        private static final float UNIT_SCALE = 0.30f;
+
         private final android.graphics.Paint number = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
         private final android.graphics.Paint unit = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
         float value;
@@ -453,9 +457,9 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
         protected void onDraw(android.graphics.Canvas canvas) {
             float w = getWidth(), h = getHeight();
             // Size from the height, then shrink if three digits would not fit the width.
-            float size = h * 0.60f;
+            float size = h * NUMBER_SCALE;
             number.setTextSize(size);
-            float maxWidth = w * 0.92f;
+            float maxWidth = w * 0.80f;
             float three = number.measureText("000");
             if (three > maxWidth) {
                 size *= maxWidth / three;
@@ -463,12 +467,12 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
             }
             float cx = w / 2f;
             android.graphics.Paint.FontMetrics nm = number.getFontMetrics();
-            float numberY = h * 0.40f - (nm.ascent + nm.descent) / 2f;
+            float numberY = h * 0.42f - (nm.ascent + nm.descent) / 2f;
             canvas.drawText(String.valueOf(Math.round(value)), cx, numberY, number);
 
-            unit.setTextSize(size * 0.34f);
+            unit.setTextSize(size * UNIT_SCALE);
             android.graphics.Paint.FontMetrics um = unit.getFontMetrics();
-            float unitY = h * 0.84f - (um.ascent + um.descent) / 2f;
+            float unitY = h * 0.76f - (um.ascent + um.descent) / 2f;
             canvas.drawText("KM/H", cx, unitY, unit);
         }
     }
@@ -733,5 +737,21 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
     @Override
     public void onBackPressed() {
         // Home screen: nothing to go back to.
+    }
+
+    /** Brings this launcher to the front a few seconds after the head unit finishes booting. */
+    public static class BootStart extends android.content.BroadcastReceiver {
+        private static final long BOOT_DELAY_MS = 5000;
+
+        @Override
+        public void onReceive(final android.content.Context c, Intent i) {
+            final android.content.BroadcastReceiver.PendingResult pending = goAsync();
+            new Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                try {
+                    c.startActivity(new Intent(c, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                } catch (Exception ignored) { }
+                pending.finish();
+            }, BOOT_DELAY_MS);
+        }
     }
 }
