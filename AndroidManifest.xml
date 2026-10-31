@@ -53,27 +53,20 @@
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
             android:configChanges="orientation|screenSize|keyboardHidden|locale" />
 
-        <service android:name=".VolumeOverlay" />
-
-        <service android:name=".GreeterService" />
-
-        <service android:name=".Odometer" />
-
         <activity
             android:name=".SetupActivity"
-            android:label="Configurar"
-            android:windowSoftInputMode="adjustPan"
+            android:label="Configura tu inicio"
             android:configChanges="orientation|screenSize|keyboardHidden|locale" />
 
         <activity
             android:name=".EqActivity"
             android:label="Ecualizador"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|keyboardHidden|locale" />
 
-        <activity
-            android:name=".BtDevicesActivity"
-            android:label="Dispositivos"
-            android:configChanges="orientation|screenSize|keyboardHidden|locale" />
+        <service android:name=".VolumeOverlay" />
+        <service android:name=".GreeterService" />
+        <service android:name=".Odometer" />
 
         <activity
             android:name=".OilActivity"
@@ -86,6 +79,15 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".MainActivity$BootStart"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
         <service
             android:name=".MediaListener"
             android:label="Inicio"
@@ -95,4 +97,5 @@
             </intent-filter>
         </service>
     </application>
+
 </manifest>
