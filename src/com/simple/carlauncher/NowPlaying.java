@@ -116,7 +116,6 @@ final class NowPlaying {
                     bt.artist = nz(i.getStringExtra("extra_avrcp_id3_artist"));
                     if (!bt.title.isEmpty()) bt.updated = now;
                     fetchBtArt();
-                    debugExtras(i);
                     break;
                 case "com.bt.ACTION_BT_MUSIC_PLAY":
                     bt.playing = true;
@@ -292,20 +291,9 @@ final class NowPlaying {
         return s == null ? "" : s.trim();
     }
 
-    // ---------- Diagnostic: which data the Bluetooth module sends ----------
-
-    private void debugExtras(Intent i) {
-        android.os.Bundle b = i.getExtras();
-        if (b == null) return;
-        StringBuilder sb = new StringBuilder("Datos BT:\n");
-        for (String k : b.keySet()) {
-            Object v = b.get(k);
-            sb.append(k).append(" = ").append(v == null ? "null" : v.getClass().getSimpleName()).append('\n');
-        }
-        android.widget.Toast.makeText(ctx, sb.toString(), android.widget.Toast.LENGTH_LONG).show();
-    }
-
     // ---------- Album cover for Bluetooth audio ----------
+    // The Bluetooth module only reports title and artist, so the cover is looked up online
+    // and kept on the device: a song already seen needs no internet the next time.
 
     private void fetchBtArt() {
         final String key = bt.artist + "|" + bt.title;
@@ -314,15 +302,19 @@ final class NowPlaying {
         bt.art = null;
         if (bt.title.isEmpty()) return;
         ArtFetcher.fetch(ctx, bt.artist, bt.title, art -> {
-            if (key.equals(bt.artKey)) {
-                bt.art = art;
-                notifyListeners();
+            if (!key.equals(bt.artKey)) return; // another song started in the meantime
+            if (art == null) {
+                bt.artKey = ""; // nothing found (or no internet): try again on the next update
+                return;
             }
+            bt.art = art;
+            notifyListeners();
         });
     }
 
-    /** Busca carátulas en internet (iTunes Search) y las guarda en caché. */
+    /** Busca carátulas en internet (iTunes Search) y las guarda en el equipo. */
     static final class ArtFetcher {
+        /** Called on the main thread; art is null when no cover could be obtained. */
         interface Callback { void onArt(Bitmap art); }
 
         private static final android.os.Handler MAIN =
@@ -330,13 +322,12 @@ final class NowPlaying {
 
         static void fetch(Context c, String artist, String title, Callback cb) {
             final Context app = c.getApplicationContext();
-            final java.io.File dir = new java.io.File(app.getCacheDir(), "art");
+            final java.io.File dir = new java.io.File(app.getFilesDir(), "art");
             final String a = artist == null ? "" : artist.trim();
             final String t = title == null ? "" : title.trim();
             if (t.isEmpty()) return;
             new Thread(() -> {
                 Bitmap bmp = null;
-                String problem = null;
                 try {
                     dir.mkdirs();
                     java.io.File f = new java.io.File(dir,
@@ -345,29 +336,19 @@ final class NowPlaying {
                         bmp = android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath());
                     } else {
                         String url = lookup(a, t);
-                        if (url == null) {
-                            problem = "no encontrada: " + a + " - " + t;
-                        } else {
-                            byte[] data = download(url);
-                            if (data != null) {
-                                try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
-                                    out.write(data);
-                                }
-                                bmp = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.length);
+                        byte[] data = url == null ? null : download(url);
+                        if (data != null) {
+                            try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
+                                out.write(data);
                             }
+                            bmp = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.length);
                         }
                     }
-                } catch (Exception e) {
-                    problem = "error " + e.getClass().getSimpleName() + ": " + e.getMessage();
+                } catch (Exception ignored) {
+                    // No internet or lookup failed: the card keeps its icon.
                 }
                 final Bitmap result = bmp;
-                final String msg = problem;
-                if (result != null) {
-                    MAIN.post(() -> cb.onArt(result));
-                } else if (msg != null) {
-                    MAIN.post(() -> android.widget.Toast.makeText(app, "Carátula " + msg,
-                            android.widget.Toast.LENGTH_LONG).show());
-                }
+                MAIN.post(() -> cb.onArt(result));
             }).start();
         }
 
