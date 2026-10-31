@@ -18,18 +18,20 @@ import java.util.Calendar;
 import java.util.List;
 
 /**
- * Spoken welcome ~20 s after the car is switched on: greeting, current weather,
- * seat-belt reminder, "pico y placa" on Wednesdays and "drive carefully".
+ * Spoken welcome ~20 s after the car is switched on: greeting with the driver's name, current
+ * weather, oil reminder, seat-belt reminder, "pico y placa" and "drive carefully".
  *
- * The phrases are pre-rendered clips (res/raw/v_*.mp3) because the head unit has no
- * text-to-speech engine. The launcher is listed in /nwdappconfig/app/NaviSound.ini so the
- * NWD kernel mixes this audio over the radio/music like navigation prompts.
+ * The greeting is spoken with the device's text-to-speech engine (Spanish, Mexico when available).
+ * The recorded clips in res/raw (owner's voice) are no longer used by the greeting.
  */
 public class GreeterService extends Service {
 
     private static final String TAG = "Greeter";
     private static final long DELAY_MS = 20_000;
     private static final long MIN_INTERVAL_MS = 60_000; // only skip duplicate wake signals
+
+    private static final String[] DAYS = {
+            "domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"};
 
     // MCU source ids (ApplicationList.xml "Source") of the last audio source before ACC off.
     private static final int SRC_RADIO = 4, SRC_BT = -125, SRC_USB = -128;
@@ -167,24 +169,61 @@ public class GreeterService extends Service {
     private final Runnable greet = () -> {
         if (!Profile.voiceEnabled(this)) return;
         prefs().edit().putLong("last_greet", System.currentTimeMillis()).apply();
-        List<String> clips = buildMessage();
-        // Owner's build ships recorded clips; shared builds speak with the device's TTS engine.
-        if (getResources().getIdentifier("v_careful", "raw", getPackageName()) != 0) speak(clips);
-        else speakTts(Speech.text(this, clips));
+        speakTts(spokenText());
     };
 
     private android.speech.tts.TextToSpeech tts;
 
-    private void speakTts(String text) {
+    /** Speaks with the device's TTS engine: Spanish (Mexico) if installed, else any Spanish. */
+    private void speakTts(final String text) {
         if (tts != null) tts.shutdown();
         tts = new android.speech.tts.TextToSpeech(this, status -> {
-            if (status != android.speech.tts.TextToSpeech.SUCCESS) return;
-            java.util.Locale es = new java.util.Locale("es", "US");
+            if (status != android.speech.tts.TextToSpeech.SUCCESS) {
+                android.widget.Toast.makeText(this, "No hay motor de voz instalado",
+                        android.widget.Toast.LENGTH_LONG).show();
+                return;
+            }
+            java.util.Locale es = new java.util.Locale("es", "MX");
+            if (tts.isLanguageAvailable(es) < 0) es = new java.util.Locale("es", "US");
             if (tts.isLanguageAvailable(es) < 0) es = new java.util.Locale("es");
             tts.setLanguage(es);
-            Bundle params = new Bundle();
-            tts.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, params, "greet");
+            // Same audio type the recorded clips used, so the head unit mixes it over the music.
+            tts.setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build());
+            tts.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "greet");
         });
+    }
+
+    /** The sentence to say: greeting with the driver's name, weather, oil, seat belt, drive carefully. */
+    private String spokenText() {
+        Calendar now = Calendar.getInstance();
+        int day = now.get(Calendar.DAY_OF_WEEK);
+        int h = now.get(Calendar.HOUR_OF_DAY);
+        String name = Profile.name(this);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(h < 12 ? "Buenos días" : h < 19 ? "Buenas tardes" : "Buenas noches");
+        if (!name.isEmpty()) sb.append(", ").append(name);
+        sb.append(". Hoy es ").append(DAYS[day - 1]).append(". ");
+
+        Weather w = Weather.cached(this);
+        if (w != null) {
+            sb.append("El clima actual es ").append(String.valueOf(w.description()).toLowerCase())
+                    .append(", con ").append(w.temp).append(" grados. ");
+        }
+        if (Odometer.isConfigured(this)) {
+            int left = Odometer.remainingKm(this);
+            if (left < 0) sb.append("Ya toca el cambio de aceite. ");
+            else if (left <= Odometer.WARN_KM) sb.append("Pronto toca el cambio de aceite. ");
+        }
+        sb.append("Recuerda abrocharte el cinturón. ");
+        if (day == Calendar.WEDNESDAY && Profile.picoPlacaEnabled(this)) {
+            sb.append("Hoy aplica el pico y placa. ");
+        }
+        sb.append("Maneja con cuidado.");
+        return sb.toString();
     }
 
     private List<String> buildMessage() {
