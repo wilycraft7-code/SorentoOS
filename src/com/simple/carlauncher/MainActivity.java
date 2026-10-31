@@ -565,9 +565,9 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
     private View buildDock() {
         LinearLayout dock = new LinearLayout(this);
         dock.setGravity(Gravity.CENTER_VERTICAL);
-        dock.addView(dockIcon(R.drawable.ic_compass, this::openMaps), weight(1f, 0));
+        dock.addView(appDockIcon("dock_zlink", R.drawable.ic_compass, null, "zlink"), weight(1f, 0));
         dock.addView(dockIcon(R.drawable.ic_bluetooth, this::openBluetooth), weight(1f, 0));
-        dock.addView(dockIcon(R.drawable.ic_radio, this::openRadio), weight(1f, 0));
+        dock.addView(shortcutIcon("dock_hotspot", null, R.drawable.ic_gear, this::openHotspot), weight(1f, 0));
 
         FrameLayout center = new FrameLayout(this);
         RingView ring = new RingView(this);
@@ -578,7 +578,8 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
 
         dock.addView(dockIcon(R.drawable.ic_w_moon,
                 () -> startActivity(new Intent(this, ScreenOffActivity.class))), weight(1f, 0));
-        dock.addView(dockIcon(R.drawable.ic_settings, this::openEqualizer), weight(1f, 0));
+        dock.addView(appDockIcon("dock_poweramp", R.drawable.ic_music, "com.maxmpz.audioplayer", "poweramp"),
+                weight(1f, 0));
         dock.addView(dockIcon(R.drawable.ic_gear, this::openSettings), weight(1f, 0));
         return dock;
     }
@@ -616,6 +617,22 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
         if (maps == null || !safeStart(maps)) {
             safeStart(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse("geo:0,0?q=")));
         }
+    }
+
+    /** Opens the hotspot (tethering) settings page; falls back to broader settings pages. */
+    private void openHotspot() {
+        Intent[] tries = {
+                new Intent("android.settings.TETHER_SETTINGS"),
+                new Intent().setClassName("com.android.settings", "com.android.settings.TetherSettings"),
+                new Intent().setClassName("com.android.settings",
+                        "com.android.settings.Settings$TetherSettingsActivity"),
+                new Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS),
+                new Intent(android.provider.Settings.ACTION_SETTINGS)
+        };
+        for (Intent t : tries) {
+            if (safeStart(t)) return;
+        }
+        toast("No se pudo abrir el hotspot");
     }
 
     /** Opens the first installed app whose name or package matches one of the keywords. */
@@ -659,6 +676,70 @@ public class MainActivity extends Activity implements NowPlaying.Listener {
         Ui.pressable(iv, 0.85f);
         iv.setOnClickListener(v -> action.run());
         return f;
+    }
+
+    // ---------- App shortcuts (ZLink, Poweramp, hotspot) ----------
+
+    /** Dock shortcut for an installed app: your own res/drawable/<iconName>.png, else the app's real icon. */
+    private View appDockIcon(String iconName, int fallback, final String pkgHint, final String... keywords) {
+        android.content.pm.ResolveInfo found = findApp(pkgHint, keywords);
+        android.graphics.drawable.Drawable appIcon = found == null ? null : found.loadIcon(getPackageManager());
+        return shortcutIcon(iconName, appIcon, fallback, () -> {
+            if (!openApp(pkgHint, keywords)) toast("No se encontró la app");
+        });
+    }
+
+    /** Icon priority: res/drawable/<iconName>.png (shown as is), then the app icon, then a tinted fallback. */
+    private View shortcutIcon(String iconName, android.graphics.drawable.Drawable appIcon, int fallback,
+                              final Runnable action) {
+        FrameLayout f = new FrameLayout(this);
+        ImageView iv = new ImageView(this);
+        int custom = drawableId(iconName);
+        if (custom != 0) {
+            iv.setImageResource(custom);
+            iv.setPadding(dp(6), dp(6), dp(6), dp(6));
+        } else if (appIcon != null) {
+            iv.setImageDrawable(appIcon);
+            iv.setPadding(dp(6), dp(6), dp(6), dp(6));
+        } else {
+            iv.setImageResource(fallback);
+            iv.setColorFilter(0xE6FFFFFF);
+            iv.setPadding(dp(12), dp(12), dp(12), dp(12));
+        }
+        f.addView(iv, new FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER));
+        Ui.pressable(iv, 0.85f);
+        iv.setOnClickListener(v -> action.run());
+        return f;
+    }
+
+    /** Finds an installed app by exact package (if given) or by a keyword in its name/package. */
+    private android.content.pm.ResolveInfo findApp(String pkgHint, String... keywords) {
+        PackageManager pm = getPackageManager();
+        Intent main = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+        android.content.pm.ResolveInfo byKeyword = null;
+        for (android.content.pm.ResolveInfo ri : pm.queryIntentActivities(main, 0)) {
+            String pkg = ri.activityInfo.packageName;
+            if (pkg.equals(getPackageName())) continue;
+            if (pkgHint != null && pkg.equals(pkgHint)) return ri;
+            if (byKeyword == null) {
+                String label = (ri.loadLabel(pm) + " " + pkg).toLowerCase();
+                for (String k : keywords) {
+                    if (label.contains(k)) {
+                        byKeyword = ri;
+                        break;
+                    }
+                }
+            }
+        }
+        return byKeyword;
+    }
+
+    private boolean openApp(String pkgHint, String... keywords) {
+        android.content.pm.ResolveInfo ri = findApp(pkgHint, keywords);
+        if (ri == null) return false;
+        Intent i = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                .setClassName(ri.activityInfo.packageName, ri.activityInfo.name);
+        return safeStart(i);
     }
 
     // ---------- Lifecycle & helpers ----------
